@@ -17,7 +17,7 @@ WORKDIR /usr/src/app
 
 # Download the official Node.js binary tarball for the target architecture and
 # verify it against the SHASUMS256.txt published for that release before extracting.
-# corepack is removed: this project uses npm, pinned by package-lock.json.
+# corepack is removed: pnpm is installed explicitly below.
 RUN set -eux; \
     case "${TARGETARCH:-$(uname -m)}" in \
       amd64|x86_64)  NODE_ARCH=x64   ;; \
@@ -35,6 +35,17 @@ RUN set -eux; \
     node --version; \
     npm --version
 
+# package.json is needed here only to read "packageManager"; the dependency
+# stages copy it again together with the lockfile.
+COPY package.json ./
+
+# Install pnpm globally, pinned to the version declared in package.json ("packageManager").
+RUN set -eux; \
+    PNPM_VERSION="$(node -p "(require('./package.json').packageManager || 'pnpm@latest').split('@')[1]")"; \
+    npm install -g "pnpm@${PNPM_VERSION}"; \
+    npm cache clean --force; \
+    pnpm --version
+
 ###############################################################################
 # Dependency stage: runtime node_modules only
 ###############################################################################
@@ -42,24 +53,26 @@ FROM node-base AS prod-deps
 
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json .npmrc* ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 
-RUN npm ci --omit=dev && npm cache clean --force
+# --shamefully-hoist flattens the store symlinks into a plain node_modules tree,
+# so the directory can be copied into the runtime stage as-is.
+RUN pnpm install --prod --frozen-lockfile --shamefully-hoist
 
 ###############################################################################
 # Build stage: full dependency tree, compiles TypeScript to dist/
 ###############################################################################
 FROM node-base AS build-stage
 
-COPY package.json package-lock.json .npmrc* ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 
 # Dev dependencies are required here: the build runs tsc.
-RUN npm ci
+RUN pnpm install --frozen-lockfile --shamefully-hoist
 
 COPY tsconfig.json ./
 COPY src ./src
 
-RUN npm run build
+RUN pnpm run build
 
 ###############################################################################
 # Runtime stage: Red Hat UBI 10 minimal
@@ -83,7 +96,7 @@ COPY --from=node-base /usr/local/bin/node /usr/local/bin/node
 ENV NODE_ENV=production
 WORKDIR /usr/src/app
 
-COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --chown=node:node --from=prod-deps /usr/src/app/node_modules ./node_modules
 COPY --chown=node:node --from=build-stage /usr/src/app/dist ./dist
 

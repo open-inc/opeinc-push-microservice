@@ -1,0 +1,19 @@
+# pnpm settings. Not a monorepo - this file exists because pnpm 10+ reads
+# overrides and build permissions from here rather than from package.json.
+
+# Postinstall scripts are opt-in. The two runtime packages are denied (matching
+# node-parse-server-opendash); neither needs its script, and the production
+# image installs with --prod so they are the only ones that could ever run
+# there. esbuild is dev-only tooling (vitest/tsx) and needs its script to link
+# the platform binary.
+allowBuilds:
+  "@firebase/util": false
+  protobufjs: false
+  esbuild: true
+
+overrides:
+  # gaxios (via the optional firebase-admin -> @google-cloud/storage chain)
+  # pins uuid ^9.0.1, which carries CVE-2026-41907. uuid 11 is the newest line
+  # that still ships a CommonJS build, which gaxios requires; 12+ are ESM-only.
+  # Remove this once that chain ships a patched uuid.
+  uuid: "^11.1.1"

@@ -15,6 +15,8 @@ Low-throughput Node.js push notification service with REST ingress and provider 
 ## Requirements
 
 - Node.js 22+
+- pnpm (the version is pinned by `packageManager` in `package.json`; run
+  `corepack enable` to have it provisioned automatically)
 - MongoDB
 
 ## Setup
@@ -24,7 +26,7 @@ Low-throughput Node.js push notification service with REST ingress and provider 
 1. Copy env template:
    - `cp .env.example .env`
 2. Install dependencies:
-   - `npm install`
+   - `pnpm install`
 
 ### 2) Configure environment variables
 
@@ -145,20 +147,20 @@ The API key value is hashed and stored; plaintext is not persisted.
 ### 4) Start service
 
 - API + in-process worker:
-  - `npm run dev`
+  - `pnpm dev`
 - Worker-only mode:
-  - `npm run worker`
+  - `pnpm worker`
 
 ## Quick Start
 
 1. `cp .env.example .env`
 2. Fill `.env` using the “Configure environment variables” section above
-3. `npm install`
-4. `npm run dev`
+3. `pnpm install`
+4. `pnpm dev`
 
 Worker loop starts inside the API process (`src/server.ts`). You can also run worker-only mode:
 
-- `npm run worker`
+- `pnpm worker`
 
 ## API Overview
 
