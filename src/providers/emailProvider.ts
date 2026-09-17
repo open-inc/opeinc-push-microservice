@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
 import { config } from '../config.js';
 import type { PushEndpoint } from '../domain/types.js';
 import type { ProviderSendInput, ProviderSendResult, PushProvider } from './provider.js';
@@ -8,7 +9,7 @@ const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export class EmailProvider implements PushProvider {
   public readonly channel = 'email' as const;
 
-  private readonly transporter: nodemailer.Transporter | null;
+  private readonly transporter: Transporter | null;
 
   constructor() {
     if (!config.SMTP_HOST || !config.SMTP_PORT || !config.SMTP_FROM) {

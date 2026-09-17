@@ -1,4 +1,6 @@
-import apn from 'apn';
+// @parse/node-apn is the maintained fork of the (abandoned) `apn` package,
+// which pinned node-forge 0.7.6 and jsonwebtoken 8 and carried their CVEs.
+import apn from '@parse/node-apn';
 import { config } from '../config.js';
 import type { PushEndpoint } from '../domain/types.js';
 import type { ProviderSendInput, ProviderSendResult, PushProvider } from './provider.js';

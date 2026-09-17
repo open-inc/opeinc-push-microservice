@@ -107,10 +107,29 @@ export class WebPushProvider implements PushProvider {
           ? urgencyRaw
           : undefined;
 
+      // Envelope consumed by the open.DASH service worker. `data` is the only
+      // pass-through object, so anything the client needs on notificationclick
+      // (url, notificationId, ...) travels inside it.
+      const data =
+        typeof input.options.data === 'object' && input.options.data
+          ? (input.options.data as Record<string, unknown>)
+          : {};
+
+      // An empty string is a configured-but-unset icon; emitting it would make
+      // the browser request "" and render a broken image.
+      const icon =
+        typeof input.options.icon === 'string' && input.options.icon.length > 0
+          ? input.options.icon
+          : undefined;
+
       const payload = {
-        topic: input.topic,
-        payload: input.payload,
-        data: input.options.data,
+        type: 'notification',
+        title: input.topic,
+        options: {
+          body: input.payload,
+          data,
+          ...(icon ? { icon } : {}),
+        },
       };
 
       const webpushOptions = {

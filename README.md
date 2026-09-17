@@ -472,6 +472,107 @@ What it does:
 
 You still need a valid API key in the test page to call protected endpoints.
 
+## Integration with open.INC Parse Server
+
+The primary consumer is `@openinc/parse-server-opendash`. Parse Server acts as
+the orchestrator and this service as the delivery backend: Parse decides _who_
+gets notified and _what_ the message says, this service handles _how_ it is
+delivered, with retries, backoff and delivery records.
+
+**The browser never calls this service.** It talks only to Parse, which holds
+the API key server-side. That lets the service stay on the internal network
+with no public route.
+
+```
+browser ──subscribe()──> Parse (OD3_Push)
+                            │  afterSave
+                            └──> POST /v1/endpoints        (x-api-key)
+
+producer ──> OD3_Notification
+                            │  afterSave
+                            └──> POST /v1/notifications/send  (one per endpoint)
+                                     │
+                                     └─> worker ─> webpush | fcm | apns | smtp
+```
+
+### Object mapping
+
+| Parse               | this service             | notes                                                                                          |
+| ------------------- | ------------------------ | ---------------------------------------------------------------------------------------------- |
+| `OD3_Push` row      | one `PushEndpoint`       | one per user + channel + device; the id is stored back on the row as `pushEndpointId`          |
+| `OD3_Push.type`     | `channel`                | `web`/`webpush` → `webpush`, `fcm`/`android` → `fcm`, `apns`/`ios` → `apns`, `email` → `email` |
+| `OD3_Push.data`     | `tokenOrSubscription`    | serialized `PushSubscription`, `data.token`, or `data.address`                                 |
+| `OD3_Push.objectId` | `externalRef`            | correlation only — never used for targeting, see below                                         |
+| `OD3_Notification`  | N `NotificationRequest`s | one submit per endpoint; the ids are stored back as `pushRequestIds`                           |
+
+Endpoints are long-lived registration state: they are created once per device
+and reused for every subsequent message. Parse `PATCH`es an existing endpoint
+when a token rotates rather than registering a new one.
+
+### Configuration pairing
+
+Three values must match on both sides, so feed each from a single variable in
+your deployment:
+
+| Parse Server                                  | this service                                |
+| --------------------------------------------- | ------------------------------------------- |
+| `OPENINC_PARSE_PUSH_SERVICE_API_KEY`          | `OPENINC_PUSH_BOOTSTRAP_CLIENT_APP_API_KEY` |
+| `OPENINC_PARSE_PUSH_SERVICE_VAPID_PUBLIC_KEY` | `OPENINC_PUSH_WEB_PUSH_VAPID_PUBLIC_KEY`    |
+| `OPENINC_PARSE_PUSH_SERVICE_BASEURL`          | `OPENINC_PUSH_PORT` (host + port)           |
+
+Parse exposes the VAPID _public_ key to the frontend through its
+`openinc-config` cloud function, which is how the browser gets the key for
+`pushManager.subscribe()` without ever reaching this service.
+
+Set `OPENINC_PARSE_WEB_PUSH_ENABLED=false` whenever the integration is on —
+Parse has its own in-process web-push path, and leaving both enabled delivers
+every notification twice.
+
+This service needs its own database, but can share the stack's MongoDB
+instance; `OPENINC_PUSH_MONGODB_DB_NAME` plus the collection prefix keep it
+clear of the Parse classes:
+
+```yaml
+push:
+  image: openinc/push-microservice:latest
+  depends_on:
+    mongodb:
+      condition: service_healthy
+  environment:
+    OPENINC_PUSH_MONGODB_URI: mongodb://user:pass@mongodb:27017/?authSource=admin
+    OPENINC_PUSH_MONGODB_DB_NAME: openinc_push
+    OPENINC_PUSH_BOOTSTRAP_CLIENT_APP_NAME: parse-server-opendash
+    OPENINC_PUSH_BOOTSTRAP_CLIENT_APP_API_KEY: ${OI_PUSH_API_KEY}
+    # ... VAPID / FCM / APNs / SMTP credentials
+```
+
+### Contracts the Parse side depends on
+
+Three behaviours are load-bearing for this integration. Changing them breaks
+delivery silently rather than loudly:
+
+1. **Targeting is always explicit.** Parse always sends `endpointIds`.
+   `externalRefs` is accepted by the send schema but never resolved, and a
+   request with neither field falls back to _every active endpoint of the
+   client app_ — a broadcast.
+2. **One submit per endpoint.** The worker reschedules an entire job when any
+   single endpoint fails retryably, then re-sends to all of that job's
+   endpoints. Batching several devices into one request would turn one flaky
+   device into duplicate deliveries for every other device.
+3. **The Web Push envelope is a wire contract** with the open.DASH service
+   worker — see _Current provider mapping_ below. It is pinned by
+   `tests/webPushPayload.test.ts`.
+
+A missing provider configuration is reported by `validateEndpoint()`, which the
+worker evaluates before `send()`, so it records an `ENDPOINT_INVALID` attempt
+and leaves the endpoint `active`. Endpoints are only marked `invalid` when a
+provider rejects the token itself, so an unconfigured channel recovers on its
+own once credentials are supplied.
+
+The Parse-side half of this integration — config keys, hooks, class fields and
+rollout — is documented in `PUSHSERVICE.md` in the
+`node-parse-server-opendash` repository.
+
 ## Adapter Contract (Contributors)
 
 All provider adapters implement a shared send contract:
@@ -503,7 +604,29 @@ send(input: {
   - `target`: serialized PushSubscription
   - `topic`: notification title
   - `payload`: notification body
-  - `options`: `ttl`, `urgency`, optional `topic`, plus `data`
+  - `options`: `ttl`, `urgency`, `icon`, optional `topic`, plus `data`
+
+  The JSON delivered to the browser is a wire contract with the service worker:
+
+  ```json
+  {
+    "type": "notification",
+    "title": "<topic>",
+    "options": {
+      "body": "<payload>",
+      "data": { "...": "options.data, passed through verbatim" },
+      "icon": "<options.icon, omitted when unset>"
+    }
+  }
+  ```
+
+  A service worker renders it with
+  `showNotification(msg.title, msg.options)`. `options.data` is the only
+  pass-through object, so anything needed on `notificationclick` (a target URL,
+  a record id) belongs in the `data` field of the send payload. The shape is
+  pinned by `tests/webPushPayload.test.ts` — changing it silently breaks every
+  installed service worker.
+
 - `fcm`
   - `target`: FCM registration token
   - `topic`: notification title

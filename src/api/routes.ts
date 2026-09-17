@@ -29,21 +29,38 @@ export const routes: FastifyPluginAsync = async (fastify) => {
       data = { payload: event.data ? event.data.text() : '' };
     }
 
-    const payloadValue = typeof data.payload === 'string' ? data.payload : '';
+    // Envelope: { type: 'notification', title, options: { body, data, icon } }.
+    // The legacy flat shape (topic/payload/body) is still accepted so an older
+    // registration keeps rendering after an upgrade.
+    const options = typeof data.options === 'object' && data.options ? data.options : {};
+
     const title =
       (typeof data.title === 'string' && data.title.length > 0
         ? data.title
         : typeof data.topic === 'string' && data.topic.length > 0
           ? data.topic
           : 'Notification');
+
     const body =
-      (typeof data.body === 'string' && data.body.length > 0
-        ? data.body
-        : payloadValue);
+      (typeof options.body === 'string' && options.body.length > 0
+        ? options.body
+        : typeof data.body === 'string' && data.body.length > 0
+          ? data.body
+          : typeof data.payload === 'string'
+            ? data.payload
+            : '');
+
+    const payloadData =
+      (typeof options.data === 'object' && options.data
+        ? options.data
+        : typeof data.data === 'object' && data.data
+          ? data.data
+          : {});
 
     await self.registration.showNotification(title, {
       body,
-      data: typeof data.data === 'object' && data.data ? data.data : {},
+      data: payloadData,
+      ...(typeof options.icon === 'string' ? { icon: options.icon } : {}),
     });
   })());
 });
